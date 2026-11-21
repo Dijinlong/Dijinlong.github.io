@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Pricing 103 models across 51 sellers: how the discount list is built</title>
+<meta name="description" content="Why a single discount number hides the real cost of LLM API aggregation, and how we price per model instead of per seller.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul{margin:12px 0 12px 22px}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<p class="meta"><a href="/">← LONG AI engineering notes</a></p>
+<h1>Pricing 103 models across 51 sellers: how the discount list is built</h1>
+<p class="meta">Published 2026-11-21 · LONG AI</p>
+
+<p>"Up to 78% below list price" is a marketing number. It is also, in practice, the least useful number in an aggregator, because the discount differs per model, per seller and per token direction. Here is how we actually build the price table and where the headline discount comes from.</p>
+
+<h2>Discount is per model, not per seller</h2>
+<p>A seller offering 2.2x on GPT-class models may be at 6x on image models. Publishing one number per seller forces you to either advertise the best case or the average, and both mislead. We list the price of each of the 103 models with the seller mix behind it, and the headline figure is simply the best observed ratio at publication time.</h2>
+
+<h2>Input and output tokens are priced separately</h2>
+<ul>
+<li>Chat models: input and output multipliers differ, sometimes by 4x.</li>
+<li>Reasoning models: output dominates, so a "cheap" channel with long outputs can lose to a pricier one.</li>
+<li>Image and video models: priced per generation or per second, not per token — they cannot be merged into the same table without a unit column.</li>
+</ul>
+
+<h2>Why the cheapest seller is rarely the default</h2>
+<p>Below roughly 20% of list price, timeout rates and protocol defects climb fast. We keep those channels available but not primary: the route selection prefers a channel whose error rate stays under control, and only falls back to the cheapest when the primary is saturated. The savings from a failing channel are consumed by retries and by refunds, so effective cost can exceed list.</h2>
+
+<h2>Settlement currency and rounding</h2>
+<p>Upstreams quote in USD, users top up in CNY. We settle at a fixed published rate rather than a live one, and round at the token level once per request, not per chunk. Both choices are boring, and both avoid the "small balance drift" complaints that per-chunk rounding produces.</p>
+
+<h2>See the current table</h2>
+<p>The live price table, per-model ratios and the status board sit on <a href="https://ai.dijinlong.com">LONG AI</a> — 103 models listed, 51 sellers, settled today ¥27,560.99 across 517,668 total calls. The routing notes are in the <a href="/">first article</a>, and the MCP side is in <a href="/mcp-server.html">this one</a>.</p>
+
+<footer>LONG AI · <a href="https://ai.dijinlong.com">ai.dijinlong.com</a></footer>
+</body>
+</html>
