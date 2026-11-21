@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Exposing 103 models as an MCP server: what the gateway had to expose</title>
+<meta name="description" content="How the LONG AI gateway maps its OpenAI-compatible surface onto MCP tools, and what that forced us to design differently.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul{margin:12px 0 12px 22px}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<p class="meta"><a href="/">← LONG AI engineering notes</a></p>
+<h1>Exposing 103 models as an MCP server: what the gateway had to expose</h1>
+<p class="meta">Published 2026-11-21 · LONG AI</p>
+
+<p>MCP is a different contract from an HTTP API. The client picks a tool by name and description before it ever sees a response, so the catalogue has to be small, stable and self-describing. Here is how we mapped an OpenAI-compatible gateway with 103 models onto three tools, and what broke on the way.</p>
+
+<h2>Why three tools, not a hundred</h2>
+<p>One tool per model looks clean in a demo and becomes noise in production: the model list changes weekly, and a client that cached yesterday's catalogue starts calling names that no longer exist. We expose one listing tool, one chat tool and one image tool, and let the listing tool carry the model inventory as data instead of as tool names.</p>
+
+<h2>Model inventory as a payload, not as structure</h2>
+<ul>
+<li><code>list_models</code> returns ids, capability flags and per-model pricing notes, cached for a short window.</li>
+<li><code>chat</code> takes a model id, messages, optional tools, and returns assistant content plus usage.</li>
+<li><code>generate_image</code> wraps the video/image models that sit behind the same account balance.</li>
+</ul>
+<p>The trade-off: the client can no longer see per-model schemas at connect time. In exchange, adding a model upstream never requires a server release.</p>
+
+<h2>Errors have to be actionable to an agent</h2>
+<p>Humans read stack traces. Agents read the message and retry. Every failure returns a machine-readable code, a short explanation, and an explicit hint about whether retrying with a different model would help. A "429 from upstream X" that does not say "use model Y or back off 30 seconds" is a dead end for an autonomous client.</p>
+
+<h2>Failover belongs in the gateway, not in the client</h2>
+<p>Because the MCP layer is thin, retries and seller switching stay server-side. When one upstream times out, the same request is retried against the next seller in price order before the tool returns. The client sees one answer, one usage block, and no knowledge of the three attempts behind it.</p>
+
+<h2>Where to look next</h2>
+<p>The gateway, the status board and the price table are all served from <a href="https://ai.dijinlong.com">LONG AI</a>. The MCP server itself lives at <a href="https://github.com/Dijinlong/longai-mcp-server">Dijinlong/longai-mcp-server</a>, the routing and billing notes are in the <a href="/">previous article</a>, and the price table logic is in <a href="/pricing.html">Pricing 103 models across 51 sellers</a>.</p>
+
+<footer>LONG AI · <a href="https://ai.dijinlong.com">ai.dijinlong.com</a></footer>
+</body>
+</html>
