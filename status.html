@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Status pages lie: what to log instead when you resell LLM APIs</title>
+<meta name="description" content="A status board shows uptime. It does not show silent truncation, mis-typed errors or schema drift. What a gateway should log per upstream channel instead.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul{margin:12px 0 12px 22px}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>Status pages lie: what to log instead when you resell LLM APIs</h1>
+<p class="meta">Published 2026-11-21 · LONG AI</p>
+
+<p>A green dot means the health endpoint answered. It says nothing about whether the stream was complete, whether the error was typed correctly, or whether the model you asked for is the model that ran. Across 51 upstream sellers, most of the incidents we have handled never turned the dot red.</p>
+
+<h2>Failure modes that keep the dot green</h2>
+<ul>
+<li>Silent context truncation: the request succeeds, the answer looks plausible, the tail was dropped.</li>
+<li>Stream that ends without <code>finish_reason</code>: the client keeps waiting or returns a half sentence.</li>
+<li>Self-invented error codes: rate limits reported as 500, so retry logic never triggers.</li>
+<li>Schema drift: an upstream ships a new field name, the adapter keeps working until a specific parameter is used.</li>
+</ul>
+
+<h2>What to record per channel</h2>
+<p>Four numbers per upstream, per minute: request count, error count split by class, p50 and p95 latency, and a completeness flag from the stream validator. The completeness flag is the one that matters — it is the only signal that catches truncation, and it comes from parsing the response, not from the socket closing.</p>
+
+<h2>Rank on stability, publish the ranking</h2>
+<p>Once you score channels, the ranking should drive routing and should be visible. A public board that shows which channels are degraded is useful to customers; a board that only shows "operational" is decoration. We keep the status board and the price table on the same domain so a buyer can see both before signing up.</p>
+
+<h2>Alerts should be about behaviour, not existence</h2>
+<p>Do not alert on "channel down". Alert on "completeness flag below 99% for ten minutes" or "p95 latency doubled against the seven-day baseline". Both fire before customers notice, and both are actionable — you demote the channel and traffic moves, no incident call required.</p>
+
+<h2>See it running</h2>
+<p><a href="https://ai.dijinlong.com">LONG AI</a> publishes the board it uses for routing decisions: 103 models live, 51 upstream sellers, automatic failover to the next channel. The status page and the price table are both public.</p>
+
+<h2>More notes</h2>
+<p><a href="/">The engineering notes behind this</a> — routing, billing order, protocol checks.</p>
+<p><a href="/compare.html">Six checks before you switch to another API reseller</a> — the buyer-side version.</p>
+<p><a href="/faq.html">FAQ: 51 upstream sellers behind one endpoint</a>.</p>
+
+<footer>LONG AI · <a href="https://ai.dijinlong.com">ai.dijinlong.com</a></footer>
+</body>
+</html>
