@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LONG AI engineering notes — routing, billing and protocol checks for 51 upstream API sellers</title>
+<meta name="description" content="Field notes from running a gateway that routes 103 models across 51 upstream API sellers behind a single OpenAI-compatible endpoint.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul{margin:12px 0 12px 22px}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>LONG AI engineering notes: 103 models, 51 upstream sellers, one OpenAI-compatible endpoint</h1>
+<p class="meta">Published 2026-11-21 · LONG AI</p>
+
+<p>A single <code>/v1/chat/completions</code> request looks trivial from the client side. Behind it sit five stages: auth and quota, model-name normalisation, upstream selection, protocol adaptation, and streaming plus usage accounting. These are the notes from routing live traffic through 51 upstream sellers.</p>
+
+<h2>Routing: the same model id is not the same product</h2>
+<p>Behind the same model id, different upstreams ship different versions, different context windows and sometimes different billing units. We tag every upstream model with capability flags — context length, tool-calling support, image input — and rank stability above price when choosing a route. Channels discounted below 20% of list price usually carry an order-of-magnitude worse timeout rate, and the savings get eaten by retries.</p>
+
+<h2>Billing: pre-hold, settlement, refund — in which order</h2>
+<ul>
+<li>Hold an upper-bound estimate when the request arrives.</li>
+<li>Settle against the real <code>usage</code> the upstream returns, input and output priced separately.</li>
+<li>Refund in full on failure, including the intermediate state where the upstream was charged but returned no content.</li>
+</ul>
+<p>Get that order wrong and users see "balance dropped but no answer" — the fastest way to lose a customer.</p>
+
+<h2>Protocol compatibility: a 200 does not mean it works</h2>
+<p>An upstream that returns 200 may still stream incorrectly; one that streams fine may violate the spec on <code>tool_calls</code>. We run a fixed regression suite against every channel: chunk format, <code>finish_reason</code>, <code>usage</code> fields, and whether error codes land inside OpenAI semantics. A channel that fails this suite never enters the primary lane, however cheap it is.</p>
+
+<h2>Three concrete traps</h2>
+<p>Across 51 sellers the most common defects are self-invented error codes (rate limits reported as 500), missing usage at stream end, and silent context truncation. The third is the nastiest: the request succeeds, the answer looks reasonable, and the tail was quietly dropped.</p>
+
+<h2>Verify it yourself</h2>
+<p>To compare price and latency directly, point the OpenAI SDK at <a href="https://ai.dijinlong.com">LONG AI</a> and send one request — 103 models live, 51 upstreams, automatic failover to the next seller. The public status board and price table are on the same domain.</p>
+
+<footer>LONG AI · <a href="https://ai.dijinlong.com">ai.dijinlong.com</a></footer>
+</body>
+</html>
