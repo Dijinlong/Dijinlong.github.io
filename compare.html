@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Six checks before you switch to another LLM API reseller</title>
+<meta name="description" content="A short, concrete checklist for comparing OpenAI-compatible API resellers: streaming, tool calls, usage accounting, failover, price transparency, status page.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul{margin:12px 0 12px 22px}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>Six checks before you switch to another LLM API reseller</h1>
+<p class="meta">Published 2026-11-21 · LONG AI</p>
+
+<p>Every reseller quotes a discount. Almost none of them tell you what breaks first under real traffic. These six checks take an afternoon, and each one has a failure mode we have actually seen in production behind 51 upstream sellers.</p>
+
+<h2>1. Stream shape, not just status code</h2>
+<p>Send a streaming request and look at the chunks themselves: is <code>delta.content</code> populated, does <code>finish_reason</code> arrive once, does the stream end cleanly. Channels that pass a non-streaming smoke test routinely break here, because the adapter was written for the buffered path.</h2>
+
+<h2>2. Tool calls from a model that claims support</h2>
+<p>"Supports function calling" is a claim on a price page. Test it: two tools in one turn, then check that <code>tool_calls[].function.arguments</code> is valid JSON in every fragment. Silent truncation of the arguments block is a common defect and it only surfaces on the second tool.</h2>
+
+<h2>3. Usage accounting on the final chunk</h2>
+<p>If <code>usage</code> is missing from stream responses, you are estimating tokens — and estimates drift against the bill in a direction that is never favourable. Compare reported tokens with what your own tokeniser computes for three prompts before trusting the numbers.</h2>
+
+<h2>4. What happens on failure</h2>
+<p>Fail the upstream on purpose — wrong key, unsupported parameter, oversized context — and watch what comes back. A reseller that hides upstream errors behind a generic 500 makes debugging impossible. You want the upstream status and body preserved in a typed error, plus transparent failover to the next channel.</h2>
+
+<h2>5. Is the price list a table or a screenshot</h2>
+<p>A per-model ratio list that is generated from the same data the settlement engine reads can be trusted. A marketing page that says "up to 90% off" cannot. Check whether the discount is per model, whether input and output are priced separately, and whether the list updates when the upstream price moves.</h2>
+
+<h2>6. A status board you can watch</h2>
+<p>Latency and availability per channel, updated continuously, is the cheapest way to tell whether a problem is yours or theirs. If there is no public status page, you will discover outages from your own users instead.</p>
+
+<h2>Run the checks</h2>
+<p><a href="https://ai.dijinlong.com">LONG AI</a> runs 103 models across 51 upstream sellers behind one OpenAI-compatible endpoint, with automatic failover and a public status board — the six checks above are the same suite we run before a channel enters the primary lane.</p>
+
+<h2>More notes</h2>
+<p><a href="/">Routing, billing order and protocol checks: the engineering notes</a> — the long version behind this checklist.</p>
+<p><a href="/faq.html">FAQ: running a gateway with 51 upstream sellers</a> — the questions that come up most often.</p>
+<p><a href="/pricing.html">How the discount list is built</a> — ratios, separate input/output pricing, why the cheapest channel is not the default.</p>
+
+<footer>LONG AI · <a href="https://ai.dijinlong.com">ai.dijinlong.com</a></footer>
+</body>
+</html>
