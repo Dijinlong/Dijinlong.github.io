@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One API key, many upstreams: how failover works when a seller goes quiet</title>
+<meta name="description" content="A single OpenAI-compatible key can route to many upstream sellers. Here is what failover actually has to decide, which failures are worth re-routing, and how to bound the cost of trying the next seller.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul,ol{margin:12px 0 12px 22px}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+th,td{border:1px solid #e3e3e3;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f7f7f7}
+code{background:#f3f3f3;padding:1px 4px;border-radius:3px;font-size:14px}
+pre{background:#f7f7f7;padding:12px;overflow-x:auto;font-size:13.5px;line-height:1.5}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>One API key, many upstreams: how failover works when a seller goes quiet</h1>
+<p class="meta">Published 2026-11-27 &middot; LONG AI Engineering Notes &middot; snapshot 2026-11-26 19:02 UTC+8</p>
+<p>The promise of a gateway key is that you stop thinking about upstreams: one base URL, one key, and the model name you already have in your client. That holds right up to the moment one seller stops answering. Then the interesting question appears — failover is not "retry the same request", it is "decide whether a different seller can take this request, and what it costs to find out".</p>
+
+<p>The marketplace shape behind the key is uneven by design. In the current public snapshot there are 109 live entries, and 58 of them have exactly one seller behind them; 16 have two, and the rest spread across three or more, with the widest entry reaching 15. Certification is uneven too: 193 certified sellers sit across 106 entries, and 3 entries have no certified seller at all. Failover quality is a property of that distribution, not of the gateway software.</p>
+
+<h2>What one key actually routes to</h2>
+
+<p>The key maps to a (model, seller) pair at request time, and the mapping is re-decided on every call unless you pin it. Three consequences follow:</p>
+
+<ul>
+<li>The same model name can resolve to different upstreams on consecutive requests, so latency and error rate are properties of the pair, not the model.</li>
+<li>A pinned seller is a stability guarantee you pay for — you give up the cheapest on-call bid to remove the routing variable.</li>
+<li>An entry with one seller has no failover target at all. A 95% tier on a single-seller entry is worth less than the same tier where a second bidder exists.</li>
+</ul>
+
+<p>The seller-count distribution per model is on the <a href="https://ai.dijinlong.com/model-plaza">model plaza</a>; the model reference pages that document units and tiers are on <a href="https://ai.dijinlong.com/docs">docs</a>.</p>
+
+<h2>Three failures, three different actions</h2>
+
+<p>Most "failover" bugs come from treating every error as retryable. The distinction that matters is whether the request was rejected before or after the upstream started work.</p>
+
+<table>
+<tr><th>Failure</th><th>What it means</th><th>Right action</th></tr>
+<tr><td>429 with Retry-After</td><td>the seller is congested but healthy</td><td>wait the header value on the same seller, or re-route if the deadline is tight</td></tr>
+<tr><td>5xx / timeout mid-stream</td><td>the seller started work and gave up</td><td>re-route, but treat the partial output as wasted billing</td></tr>
+<tr><td>401 / 403 on a pinned pair</td><td>credentials or quota on that seller changed</td><td>do not retry; unpin and pick another seller</td></tr>
+<tr><td>connection refused / DNS</td><td>the seller is gone from the pool</td><td>re-route immediately, log the seller out</td></tr>
+</table>
+
+<p>The mid-stream case is the expensive one: tokens were already generated, so a retry re-bills the same prompt and pays twice for the failed half. That is why the retry budget should be denominated in money or tokens, not attempts.</p>
+
+<h2>Failover is a routing decision, not a retry loop</h2>
+
+<p>A retry loop that walks the same seller is amplification. A failover path changes the target and keeps the budget. Three rules keep it cheap:</p>
+
+<ol>
+<li>Try at most two sellers per request. Beyond two, the request is probably not going to finish inside the caller's deadline anyway.</li>
+<li>Never fail over on 400-class validation errors. The body is wrong, and the next seller will reject it identically.</li>
+<li>Carry one deadline across all attempts, not one per attempt — otherwise three attempts silently triple your tail latency.</li>
+</ol>
+
+<h2>A failover wrapper that does not double-bill</h2>
+
+<p>The snippet below keeps the deadline and the token budget outside the loop, and only re-routes on errors that are worth re-routing. It runs against any OpenAI-compatible endpoint, so it can be tested without a gateway.</p>
+
+<pre><code>import httpx, time
+
+REROUTE_ON = {429, 500, 502, 503, 504}
+
+def call_with_failover(client, payload, deadline_s=25.0):
+    t0 = time.monotonic()
+    for seller in ["a", "b"]:                     # at most two hops
+        if time.monotonic() - t0 &gt; deadline_s:
+            break
+        try:
+            r = client.post("/v1/chat/completions", json=payload,
+                            headers={"X-Seller": seller}, timeout=deadline_s)
+        except (httpx.ConnectError, httpx.ReadTimeout):
+            continue                              # seller unreachable, next hop
+        if r.status_code not in REROUTE_ON:
+            r.raise_for_status()
+            return r.json()
+        retry_after = r.headers.get("Retry-After")
+        wait = min(float(retry_after or 2), 8.0)
+        if time.monotonic() - t0 + wait &gt; deadline_s:
+            raise RuntimeError("deadline exceeded before hop 2")
+        time.sleep(wait)
+    raise RuntimeError("no seller answered inside the deadline")
+</code></pre>
+
+<p>Two details make it useful rather than illustrative: the deadline is checked before every hop, and the wait is capped so a bad Retry-After cannot consume the whole budget. The seller header is a stand-in for whatever routing hint your gateway accepts; the point is that the target changes while the budget does not.</p>
+
+<h2>What to watch on the status page</h2>
+
+<p>Failover only pays off if you can tell whether it worked. Three numbers answer that: the share of requests that needed a second hop, the p95 latency of second-hop requests versus first-hop ones, and the fraction of re-routes that ended in success. A rising second-hop share with a falling success rate means the pool is degrading and failover is hiding it.</p>
+
+<p>The per-upstream view is on the <a href="https://ai.dijinlong.com/status">status page</a>; the definitions used for 429 share and retry success are in the <a href="https://ai.dijinlong.com/faq">FAQ</a>.</p>
+
+<p>The short version: pin when you need determinism, do not when you need price, and always measure how often you needed the second hop — because that number is the real quality of the pool you are buying from.</p>
+
+<footer>
+<p>LONG AI &middot; LLM API marketplace — one OpenAI-compatible key across 109 live models from 63 upstream sellers.
+<a href="https://ai.dijinlong.com/pricing">Live pricing</a> &middot;
+<a href="https://ai.dijinlong.com/model-plaza">Model plaza</a> &middot;
+<a href="https://ai.dijinlong.com/docs">Docs</a></p>
+</footer>
+</body>
+</html>
