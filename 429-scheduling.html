@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>429s are a scheduling problem, not a capacity problem</title>
+<meta name="description" content="Why rate-limit 429s cluster per upstream, how to honour Retry-After without amplifying congestion, and how to re-route instead of re-retrying.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul,ol{margin:12px 0 12px 22px}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+th,td{border:1px solid #e3e3e3;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f7f7f7}
+code{background:#f3f3f3;padding:1px 4px;border-radius:3px;font-size:14px}
+pre{background:#f7f7f7;padding:12px;overflow-x:auto;font-size:13.5px;line-height:1.5}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>429s are a scheduling problem, not a capacity problem</h1>
+<p class="meta">Published 2026-11-26 &middot; LONG AI Engineering Notes &middot; snapshot 2026-11-26 19:02 UTC+8</p>
+<p>A 429 is not a sign that the upstream is broken. In a marketplace it is the normal output of a scheduler that has more requests than slots, and the fix is almost never "retry harder" — it is "retry in a shape the scheduler can absorb".</p>
+
+<p>This note is about the scheduling side of rate limits: why 429s cluster, what <code>Retry-After</code> actually tells you, and how to write a retry loop that does not amplify a mild congestion into a full outage.</p>
+
+<h2>Why 429s arrive in bursts, not evenly</h2>
+
+<p>Every upstream seller behind a gateway has its own concurrency window: a number of in-flight requests it will accept before it starts shedding load. When your traffic sits well below that window, you see a steady stream of 200s. When it crosses the window, the queue does not degrade gently — it flips. Requests that would have taken 2 seconds start taking 12, then the seller's own timeout fires, then the gateway sees a burst of failures that all look like "too many requests".</p>
+
+<p>That is why one slow endpoint can poison an unrelated one: both are competing for the same concurrency tokens. The practical consequence is that you should treat 429 as a <em>per-seller, per-model</em> signal, not a global one. Log it with the upstream that produced it, not just the model name you asked for.</p>
+
+<h2>Read Retry-After before you read the body</h2>
+
+<p>Most client libraries retry with a fixed schedule and ignore the header. That is the single most common cause of a retry storm: the server tells you "come back in 3 seconds", the client comes back in 200 ms, three times, then escalates. The multiplicand is what turns a 30-second congestion into a 10-minute one.</p>
+
+<ul>
+<li><code>Retry-After: 3</code> — wait the whole 3 seconds. Not 2.9, not "3 plus jitter on the first attempt".</li>
+<li><code>Retry-After</code> in HTTP-date form — compute the delta against your own clock, and clamp it to a sane maximum so a skewed upstream clock cannot park you for an hour.</li>
+<li>No header at all — fall back to exponential backoff with full jitter, capped at roughly 8–10 seconds for interactive traffic.</li>
+</ul>
+
+<h2>A retry loop that does not amplify congestion</h2>
+
+<p>The loop below is deliberately boring. It caps attempts, honours the header when present, and adds full jitter only when the server gives no guidance. The <code>deadline</code> argument matters more than the attempt count: an interactive request has a budget, and a retry that runs past the caller's budget is just a slower failure.</p>
+
+<pre><code>import random, time, httpx
+
+RETRY_STATUS = {429, 500, 502, 503, 504}
+
+def call_with_budget(client, payload, deadline_s=25.0, max_attempts=4):
+    start = time.monotonic()
+    for attempt in range(1, max_attempts + 1):
+        try:
+            r = client.post("/v1/chat/completions", json=payload, timeout=20.0)
+        except (httpx.ConnectError, httpx.ReadTimeout) as exc:
+            if attempt == max_attempts:
+                raise
+            delay = random.uniform(0, min(8.0, 0.5 * 2 ** (attempt - 1)))
+        else:
+            if r.status_code not in RETRY_STATUS:
+                r.raise_for_status()
+                return r.json()
+
+            header = r.headers.get("retry-after")
+            if header and header.isdigit():
+                delay = min(float(header), 30.0)          # trust the server
+            else:
+                delay = random.uniform(0, min(8.0, 0.5 * 2 ** (attempt - 1)))  # full jitter
+
+        remaining = deadline_s - (time.monotonic() - start)
+        if remaining &lt;= 1.0 or attempt == max_attempts:
+            return {"error": "budget_exhausted", "status": r.status_code if 'r' in dir() else None}
+        time.sleep(min(delay, remaining))
+    raise RuntimeError("unreachable")
+</code></pre>
+
+<p>Two details in that loop are easy to miss. First, the sleep is clamped to the remaining budget, so the last attempt never overshoots the caller's deadline. Second, the <code>Retry-After</code> value is capped at 30 seconds: sellers occasionally return a very large value during maintenance, and honouring it literally is worse than failing fast and letting the caller decide.</p>
+
+<h2>Spread the load instead of retrying it</h2>
+
+<p>Retries buy you time; routing buys you throughput. If a model has several sellers behind it, a 429 from one seller should not be retried against the same seller — it should be re-routed. That is the part a client cannot do alone, and it is why the seller count on a listing matters at all: with one seller there is nowhere to route, and the only options are waiting or degrading the request.</p>
+
+<p>On a marketplace where roughly half the listings currently have a single seller, this asymmetry is worth planning for: pick the multi-seller listings for anything latency-sensitive, and put the single-seller ones behind a queue that can absorb a 30-second wait without the caller noticing.</p>
+
+<h2>What to watch on the status side</h2>
+
+<p>Three numbers, sampled per seller, cover most of it: 429 share as a fraction of total requests, p95 latency, and the retry-to-success ratio. The first tells you whether you are pushing against the window; the second tells you whether you are about to; the third tells you whether your retry policy is helping or hurting. If 429 share rises while p95 latency stays flat, you are being throttled, not congested — different fix, usually concurrency, not backoff.</p>
+
+<p>Live availability per upstream is published on the <a href="https://ai.dijinlong.com/status">status page</a>, and the per-model seller counts that decide whether re-routing is even possible are on the <a href="https://ai.dijinlong.com/model-plaza">model plaza</a>; current prices for the models you are re-routing to are on the <a href="https://ai.dijinlong.com/pricing">pricing page</a>.</p>
+
+<h2>The short version</h2>
+
+<ol>
+<li>429 is a scheduling signal from one upstream, not a verdict on the gateway.</li>
+<li>Obey <code>Retry-After</code> exactly; only invent jitter when the header is absent.</li>
+<li>Cap retries by deadline, not by attempt count.</li>
+<li>Re-route before you re-retry, and only where a second seller exists.</li>
+<li>Track 429 share, p95, and retry-to-success together — they diagnose different problems.</li>
+</ol>
+
+<p>None of this needs a circuit breaker framework. A deadline, a header check, and a jittered cap remove most of the amplification, and the rest is routing.</p>
+
+<footer>
+<p>LONG AI &middot; LLM API marketplace — one OpenAI-compatible key across 109 live models from 63 upstream sellers.
+<a href="https://ai.dijinlong.com/pricing">Live pricing</a> &middot;
+<a href="https://ai.dijinlong.com/model-plaza">Model plaza</a> &middot;
+<a href="https://ai.dijinlong.com/docs">Docs</a></p>
+</footer>
+</body>
+</html>
