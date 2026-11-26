@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Reading a model reference page: what billing unit, tier and channel actually mean</title>
+<meta name="description" content="A reference page mixes three separate things: the billing unit, the price tier and the channel that serves the request. Here is how to read each field without mixing them up.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul,ol{margin:12px 0 12px 22px}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+th,td{border:1px solid #e3e3e3;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f7f7f7}
+code{background:#f3f3f3;padding:1px 4px;border-radius:3px;font-size:14px}
+pre{background:#f7f7f7;padding:12px;overflow-x:auto;font-size:13.5px;line-height:1.5}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>Reading a model reference page: what billing unit, tier and channel actually mean</h1>
+<p class="meta">Published 2026-11-26 &middot; LONG AI Engineering Notes &middot; snapshot 2026-11-26 19:02 UTC+8</p>
+<p>Most price mistakes are not arithmetic mistakes. They are reading mistakes: a number is copied from a reference page, the unit behind it is not, and a request that should cost cents gets budgeted as if it cost dollars. The page does not usually lie. It just packs three independent facts into one line — the billing unit, the price tier, and the channel that serves the request — and leaves you to separate them.</p>
+
+<p>This note takes the three apart, using the current public snapshot of a model reference page: 109 live entries (81 text, 17 video, 11 image) and 563 documentation pages, read at 2026-11-26 19:02 UTC+8. Every entry on the page has the same shape, which is exactly why the fields are easy to swap.</p>
+
+<h2>One line of text, three different questions</h2>
+
+<p>A line that reads <code>gpt-6-sol · input 0.012 / 1K tokens · output 0.036 / 1K tokens</code> answers three questions that have nothing to do with each other:</p>
+
+<ul>
+<li><b>Unit</b> — 0.012 of what, per how much? Per 1K tokens, per 1M tokens, per image, per second?</li>
+<li><b>Tier</b> — is that the headline price, or one step on a staircase that only applies above a spend level?</li>
+<li><b>Channel</b> — which upstream produced this number, and is it the one that will actually serve your request?</li>
+</ul>
+
+<p>Read the wrong unit and you are off by 1000×. Read the wrong tier and you are off by the discount percentage. Read the wrong channel and the price is right but the latency, the quota and the retry behaviour are somebody else's problem.</p>
+
+<h2>Billing unit: tokens, seconds, or a flat count</h2>
+
+<p>The 109 entries split by what they meter: 81 text entries bill on tokens, 17 video entries bill on seconds of generated output, and 11 image entries bill per image. A text entry is further split into input and output rates, and those two are never the same number. Inputs are usually repriced at a lower rate on a cache hit; outputs are not.</p>
+
+<p>Watch the multiplier prefix. A page that says <code>per 1K</code> and another page that says <code>per 1M</code> can show numbers that differ by three orders of magnitude while describing the same price. When you copy a number into a spreadsheet, copy the unit beside it in the same cell, or the sheet will silently compare two different currencies of tokens.</p>
+
+<p>Video and image entries meter the <em>artifact</em>, not the conversation: a clip is billed by output duration, so a re-roll costs real money.</p>
+
+<h2>Tier: a price table is a staircase, not a number</h2>
+
+<p>On the current snapshot, the entries that carry an ask-price structure do not carry one price each — they carry a ladder. Measured across all entries: 17 sit at a 50% step, 20 at 90%, 39 at 95%, and 33 go deeper than 95%. That distribution is the honest shape of the market: a headline rate and a negotiated rate are different fields on the same page.</p>
+
+<p>Two rules follow. First, a tier is usually <em>cumulative within a period</em>, not per-order, so the price of your 40th request depends on the 39 that came before it. Second, the tier attaches to the seller, not to the model: two entries for the same model name can sit on different ladders. Numbers by model alone will therefore overstate or understate your bill.</p>
+
+<p>The per-model prices and their current tiers are published on the <a href="https://ai.dijinlong.com/pricing">live pricing table</a>; the ladder depth per entry is what the table's second column is for.</p>
+
+<h2>Channel: who actually serves the request</h2>
+
+<p>Channel is the field people skip, and it is the one that decides whether the other two mean anything. A model name can appear under several sellers at once. In the current snapshot, 58 of 109 entries have exactly one seller behind them, 16 have two, and the rest spread across three or more — the widest entry has 15. Certification is not uniform either: 193 certified sellers are spread across 106 entries, which leaves 3 entries with no certified seller at all.</p>
+
+<p>That matters concretely. Where several sellers compete on one model, the effective price is the cheapest on-call seller; where only one exists, the listed price is the only price. The seller-count distribution is on the <a href="https://ai.dijinlong.com/model-plaza">model plaza</a>.</p>
+
+<h2>A worked example on one reference entry</h2>
+
+<p>Take one text entry and read it field by field rather than as a price:</p>
+
+<table>
+<tr><th>Field on the page</th><th>What it actually says</th><th>How it is misread</th></tr>
+<tr><td>input rate + unit prefix</td><td>0.012 per 1K input tokens</td><td>read as per 1M, so the estimate is 1000× low</td></tr>
+<tr><td>output rate</td><td>0.036 per 1K output tokens, cache hits excluded</td><td>averaged with the input rate into one "price"</td></tr>
+<tr><td>tier step</td><td>the entry's own ladder, attached to one seller</td><td>applied to every seller of the same model</td></tr>
+<tr><td>seller count</td><td>1 of 109 entries with a single seller</td><td>treated as if a cheaper alternative always exists</td></tr>
+<tr><td>channel / certification</td><td>who serves it, and whether they are verified</td><td>ignored until the first failure</td></tr>
+</table>
+
+<p>The failure mode is reading the row as one sentence — "0.012 per 1K, 95% off, one seller" — and multiplying all three numbers together.</p>
+
+<h2>Normalise before you compare</h2>
+
+<p>The cheapest fix is to stop comparing raw numbers and compare a normalised rate. The function below takes a reference line and returns a cost per million output tokens, which is the only figure that is comparable across text entries. It does no network calls, so it runs against a saved snapshot.</p>
+
+<pre><code>RATE = {"1k": 1_000, "1m": 1_000_000}
+
+def per_million(rate_str):
+    # "0.036/1K" or "36/1M" -> cost per 1M of the same unit
+    rate, unit = rate_str.split("/")
+    rate, unit = float(rate), unit.strip().lower()
+    per = RATE[unit]
+    return round(rate * (1_000_000 / per), 3)
+
+def entry_cost(entry, tokens_out=1_000_000):
+    out = per_million(entry["output_rate"])
+    step = entry.get("tier_percent_off", 0) / 100
+    return round(out * (1 - step), 3)
+
+sample = {"output_rate": "0.036/1K", "tier_percent_off": 50}
+print(entry_cost(sample))   # 18.0
+</code></pre>
+
+<p>Two things matter more than the printed numbers: the unit is explicit in the input string, and the tier is applied once, at the end.</p>
+
+<h2>Five checks before you quote a price</h2>
+
+<ol>
+<li>Write the unit next to every number, including the prefix (<code>1K</code> vs <code>1M</code>).</li>
+<li>Split input and output rates; cache-hit pricing is a third rate again.</li>
+<li>Ask whether the tier is per period or per order, and whether it belongs to the model or the seller.</li>
+<li>Record the seller count beside the price — a single-seller entry has no fallback bid.</li>
+<li>Snapshot the page with a timestamp; the 563 documentation pages on <a href="https://ai.dijinlong.com/model-docs">model docs</a> and the price table change independently, and mixing snapshots is the quietest way to get a wrong total.</li>
+</ol>
+
+<p>The <a href="https://ai.dijinlong.com/faq">FAQ</a> covers the same three fields in the reverse direction: what a buyer is allowed to assume when a reference page does not state a unit. When it does not state one, assume nothing and measure.</p>
+
+<footer>
+<p>LONG AI &middot; LLM API marketplace — one OpenAI-compatible key across 109 live models from 63 upstream sellers.
+<a href="https://ai.dijinlong.com/pricing">Live pricing</a> &middot;
+<a href="https://ai.dijinlong.com/model-plaza">Model plaza</a> &middot;
+<a href="https://ai.dijinlong.com/docs">Docs</a></p>
+</footer>
+</body>
+</html>
