@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /img/
+
+Sitemap: https://dijinlong.github.io/sitemap.xml
