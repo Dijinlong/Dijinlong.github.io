@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>USD display, CNY settlement: how to reconcile a foreign-currency API bill</title>
+<meta name="description" content="How to reconcile an API bill that is priced in dollars but settled in yuan: where conversion enters, a worked example, and the four columns your cost ledger needs.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+p{margin:12px 0}
+ul,ol{margin:12px 0 12px 22px}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+th,td{border:1px solid #e3e3e3;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f7f7f7}
+code{background:#f3f3f3;padding:1px 4px;border-radius:3px;font-size:14px}
+pre{background:#f7f7f7;padding:12px;overflow-x:auto;font-size:13.5px;line-height:1.5}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>USD display, CNY settlement: how to reconcile a foreign-currency API bill</h1>
+<div class="meta">Data snapshot 2026-11-25 17:46 (Beijing time)</div>
+<h1>USD display, CNY settlement: how to reconcile a foreign-currency API bill</h1>
+<p>If you buy API capacity on a marketplace that shows dollars but settles in yuan, your monthly reconciliation has a structural problem: the number in the dashboard, the number on the invoice, and the number in your accounting system are three different things, and none of them is wrong.</p>
+<p>This piece walks through where the divergence comes from and how to keep a ledger that survives an audit.</p>
+<h2>Two currencies, one bill</h2>
+<p>An English-facing catalogue and a Chinese-facing catalogue can legitimately show different currencies for the same model — dollars on one, yuan on the other. That is a display decision, not a pricing decision. The settlement currency stays the same regardless of which page you looked at, which means the unit you <i>thought</i> in is not necessarily the unit you <i>pay</i> in.</p>
+<p>The practical consequence: if you compare two sellers by looking at their dollar figures, and then pay in yuan, you have introduced an exchange-rate step that neither seller controls. Two quotes that look 3% apart in dollars can land further apart or closer together once converted.</p>
+<h2>Where the conversion actually happens</h2>
+<p>There are three places a conversion can enter the chain, and only one of them is usually documented:</p>
+<ul><li><b>Display conversion.</b> The catalogue converts an official USD list price into a yuan figure for the Chinese catalogue. This is informational and typically refreshed on a schedule.</li><li><b>Settlement conversion.</b> The invoice converts your consumption at whatever rate the platform applies at billing time. This is the number that matters for cash.</li><li><b>Your own books.</b> Your accounting system converts the yuan invoice back to your reporting currency, at your bank's rate, on your posting date.</li></ul>
+<p>Three conversions, three dates, three rates. Even if every step is honest, the totals will not agree. Anyone who tells you the three numbers should match exactly is describing a system nobody actually runs.</p>
+<h2>Why your invoice will never exactly match the rate you saw</h2>
+<p>The rate printed on a price snapshot is a point-in-time figure. A published snapshot might state, say, 1 USD = 6.695 CNY at a specific timestamp. By the time you settle, that number can be stale by hours or weeks. It also may not be the rate the platform has committed to in its billing engine, which can lag the published figure deliberately so that published numbers stay stable for readers.</p>
+<p>So treat any published rate as a <i>reference anchor</i>, not a settlement guarantee. Use it to sanity-check the magnitude of your bill — if your invoice implies a rate wildly different from the anchor, something is off — but do not use it to compute to the last cent.</p>
+<h2>A worked example: 2,000 calls over one month</h2>
+<p>Take a modest workload: 2,000 chat calls in a month, averaging 2,000 input tokens each, on a mid-tier text model. On the published snapshot, the median paid price for text models in the yuan catalogue was around ¥0.402 per million input tokens, and the cheapest listed tier was about ¥0.0301 per million.</p>
+<ul><li>2,000 calls × 2,000 tokens = 4 million input tokens</li><li>At the median tier: 4 × ¥0.402 ≈ <b>¥1.61</b></li><li>At the cheapest tier: 4 × ¥0.0301 ≈ <b>¥0.12</b></li></ul>
+<p>That is a 13× spread on the same workload, decided entirely by which tier you picked — before any exchange rate enters the picture. This is the point most reconciliation write-ups miss: the currency conversion is usually a rounding error next to the tier selection. Fixing your rate assumptions will not save you; picking a different tier will.</p>
+<p>Now add the conversion. At the reference anchor of 6.695, ¥1.61 is about $0.24; ¥0.12 is about $0.018. If your bank posts the invoice at a rate 1% away from the anchor, you move by one cent on the cheaper tier and two cents on the more expensive one. Neither moves enough to notice — which is exactly why people stop checking the rate and then get surprised by a month where volume grew 50×.</p>
+<h2>What to put in your cost ledger</h2>
+<p>Four columns are enough to reconcile without guessing:</p>
+<table><thead><tr><th>Column</th><th>What goes in it</th><th>Why</th></tr></thead><tbody><tr><td>Consumption</td><td>tokens, images or seconds, per model</td><td>the only quantity you control</td></tr><tr><td>Tier price</td><td>the per-unit price you were quoted, with its currency</td><td>lets you re-derive the bill later</td></tr><tr><td>Invoice amount</td><td>the settled amount, in settlement currency</td><td>the cash truth</td></tr><tr><td>Applied rate</td><td>invoice amount ÷ re-derived amount in display currency</td><td>exposes the effective rate you actually paid</td></tr></tbody></table>
+<p>With those four, a mismatch localises immediately: if re-derived and invoice agree but your books disagree, the problem is in your accounting rate. If they do not agree, the problem is in tier price or consumption capture, and the rate is innocent.</p>
+<h2>Three things that make reconciliation hard</h2>
+<p><b>Mixed billing units in one bill.</b> A single invoice can contain per-million-token text, per-image generation and per-second video. Summing them into one number destroys the ability to re-derive anything, so keep them as separate lines even if your vendor merges them.</p>
+<p><b>Snapshot drift.</b> Prices move when sellers change quotes. A bill computed against last week's quoted price will look wrong today. Store the price you saw, with its timestamp, rather than re-reading the catalogue at reconciliation time.</p>
+<p><b>Rate changes mid-period.</b> If the platform's applied rate shifts during a billing period, a single blended rate will not reconstruct the invoice. Ask for the rate per billing line, or accept a small unexplained delta and document it.</p>
+<p>None of this is exotic. It is the ordinary work of buying anything priced in one currency and paid in another. The mistake is assuming a marketplace bill is self-explaining — it is not, and the parts that look like rounding are usually the parts you did not control.</p>
+<p><i>Reference figures come from the platform's monthly price snapshot dated 2026-11-25 17:46 (Beijing time), with USD converted at 1 USD = 6.695 CNY. The English catalogue is at <a href="https://ai.dijinlong.com/en">the /en site</a>, live quotes at <a href="https://ai.dijinlong.com/pricing">the price table</a>, per-model billing units at <a href="https://ai.dijinlong.com/model-docs">model docs</a>, and upstream health at <a href="https://ai.dijinlong.com/status">status</a>.</i></p>
+<footer>
+<p>LONG AI &middot; LLM API marketplace — one OpenAI-compatible key across 109 live models from 63 upstream sellers.
+<a href="https://ai.dijinlong.com/pricing">Live pricing</a> &middot;
+<a href="https://ai.dijinlong.com/model-plaza">Model plaza</a> &middot;
+<a href="https://ai.dijinlong.com/docs">Docs</a></p>
+</footer>
+</body>
+</html>
+
+</body></html>
