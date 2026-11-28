@@ -70,7 +70,7 @@ footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;fon
 
 <ol>
 <li><strong>Does the upstream bill cached tokens at a lower rate, or not bill them at all?</strong> Both exist. A provider that "supports caching" but bills full price for the cached portion gives you latency relief, not cost relief.</li>
-<li><strong>Is cache control exposed through the gateway?</strong> If the gateway strips <code>cache_control</code> markers or rewrites the system prompt per request, caching silently stops working and nothing in the response tells you.</li>
+<li><strong>Is cache control exposed through the gateway?</strong> If the gateway strips <code>cache_control</code> markers or rewrites the system prompt per request, caching silently stops working and nothing in the response tells you. The <a href="https://ai.dijinlong.com/docs">API docs</a> list which fields pass through unchanged.</li>
 <li><strong>Does a model switch reset the cache?</strong> Changing model mid-task invalidates the prefix on most upstreams. An A/B test that flips models every step pays full input price every step.</li>
 </ol>
 
