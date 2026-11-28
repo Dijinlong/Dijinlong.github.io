@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Prompt caching and marketplace pricing: where the discount really lands</title>
+<meta name="description" content="Prompt caching only discounts the unchanged prefix on input tokens. On a marketplace where the median model already sells at 0.5 of official price, cache savings stack far less than people expect. A worked agent-loop example.">
+<style>
+body{max-width:760px;margin:48px auto;padding:0 20px;font:16px/1.7 -apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1a1a1a}
+h1{font-size:28px;line-height:1.3;margin:0 0 8px}
+.meta{color:#666;font-size:14px;margin-bottom:32px}
+h2{font-size:20px;margin:32px 0 8px}
+h3{font-size:17px;margin:24px 0 6px}
+p{margin:12px 0}
+ul,ol{margin:12px 0 12px 22px}
+table{border-collapse:collapse;width:100%;margin:18px 0;font-size:15px}
+th,td{border:1px solid #e3e3e3;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f7f7f7}
+code{background:#f3f3f3;padding:1px 4px;border-radius:3px;font-size:14px}
+pre{background:#f7f7f7;padding:12px;border-radius:6px;overflow-x:auto;font-size:14px;line-height:1.5}
+a{color:#1b62d6}
+footer{margin-top:48px;border-top:1px solid #ddd;padding-top:16px;color:#666;font-size:14px}
+</style>
+</head>
+<body>
+<h1>Prompt caching and marketplace pricing: where the discount really lands</h1>
+<p class="meta">Published 2026-11-28 · LONG AI Engineering Notes</p>
+
+<p>The most common budgeting mistake I see with prompt caching is treating it as a second discount stacked on top of a marketplace discount. People reason: "I get 50% off official price here, and caching saves me 90% of input tokens, so my input cost is 5% of official." That arithmetic never holds, and the reason is not greed — it is that the two discounts multiply different things.</p>
+
+<p>Caching discounts the <em>cacheable portion</em> of input. A marketplace discount discounts the <em>unit price of the whole request</em>. Apply them in the wrong order, or apply them to the wrong token count, and the number you put in your budget is fiction.</p>
+
+<h2>1. What a cache actually reduces</h2>
+
+<p>A prompt cache is a prefix cache. An upstream keeps the key/value state for an exact token prefix, and if the next request starts with that same prefix, it skips recomputing it. Three constraints follow immediately:</p>
+
+<ul>
+<li><strong>Only the prefix.</strong> Nothing after the first divergence is cached. A system prompt plus tool schema is cacheable; the user message never is.</li>
+<li><strong>Only input.</strong> Output tokens are generated fresh every time. Roughly 30–50% of a chat-shaped request is output in practice, and caching touches none of it.</li>
+<li><strong>Only if identical.</strong> One whitespace change, one timestamp inserted at the top, one reordered JSON field in the tool schema, and the cache misses entirely.</li>
+</ul>
+
+<p>So before any arithmetic, write down two numbers for your workload: the cacheable prefix length as a share of total input, and the output share of total tokens. Without both, "caching saves 90%" is a number someone quoted from a blog post.</p>
+
+<h2>2. A 20-step agent loop, priced three ways</h2>
+
+<p>Take a concrete shape, because abstractions hide the point. A 20-step agent task on a text model, each step sending:</p>
+
+<table>
+<tr><th>Component</th><th>Tokens per step</th><th>Cacheable?</th></tr>
+<tr><td>System prompt + tool schema</td><td>2,000</td><td>Yes (prefix)</td></tr>
+<tr><td>Retrieved context (changes per step)</td><td>1,500</td><td>No</td></tr>
+<tr><td>Conversation history (grows)</td><td>1,000 → 4,000</td><td>Partially, if append-only</td></tr>
+<tr><td>Output</td><td>400</td><td>Never</td></tr>
+</table>
+
+<p>With a conservative single-price model at ¥0.402 per million input tokens and ¥1.610 per million output (the median and a typical 4× output multiplier from the current snapshot), the uncached bill for 20 steps is roughly <strong>¥0.0225</strong>. Applying a 90% input cache hit on the 2,000-token prefix saves about <strong>¥0.0014</strong> — 6% of the total, not 90% of anything.</p>
+
+<p>Now put the same task on a marketplace model selling at 0.5 of official price. The unit price drops by half, so the absolute cache saving drops by half too: about ¥0.0007. The discount and the cache both landed, but on different multipliers, and the combined effect on the invoice is a rounding error compared to what the "50% off plus 90% cache" mental model predicted.</p>
+
+<h2>3. Why deep discounts leave little room for stacking</h2>
+
+<p>On a marketplace where sellers compete on price, the deep discounts are already at the floor. In the November 2026 snapshot of 122 listed models from 63 vendors, the median discount was 0.5 — official price times 5% — and 70 of 122 models sat in the 0.1–0.5 range. The mean was 1.43, dragged down by that cluster, which is exactly why the median is the honest number for budgeting.</p>
+
+<p>Once you are paying 5% of list, the remaining recoverable cost is small in absolute terms. Caching still helps, but it helps on a base that has already been cut by 95%. That is the structural reason cache savings look underwhelming on a heavily discounted gateway and look dramatic on a list-price direct account: same cache behaviour, very different denominator.</p>
+
+<p>There is a second, less obvious effect: cache hit rates are usually <em>worse</em> through a gateway, because the same logical prefix may land on a different upstream seller between steps. Failover that reroutes a request mid-conversation resets the cache. If your agent loop depends on a warm prefix and your gateway is balancing across several sellers, measure the real hit rate through the gateway rather than assuming the single-upstream number.</p>
+
+<h2>4. Three checks before you budget around caching</h2>
+
+<ol>
+<li><strong>Does the upstream bill cached tokens at a lower rate, or not bill them at all?</strong> Both exist. A provider that "supports caching" but bills full price for the cached portion gives you latency relief, not cost relief.</li>
+<li><strong>Is cache control exposed through the gateway?</strong> If the gateway strips <code>cache_control</code> markers or rewrites the system prompt per request, caching silently stops working and nothing in the response tells you.</li>
+<li><strong>Does a model switch reset the cache?</strong> Changing model mid-task invalidates the prefix on most upstreams. An A/B test that flips models every step pays full input price every step.</li>
+</ol>
+
+<p>All three are answerable per model, and the answers differ by model even within one vendor. Per-model interface and billing notes are the place to check them, not the marketing page.</p>
+
+<h2>5. What to do instead of estimating</h2>
+
+<p>Measure the effective cost of one task, not the unit price. Run the same 20-step loop twice — once cold, once warm — and read the usage records for input tokens and any cache-discount field. Divide by steps. That number, not a stacked-percentage, belongs in the budget.</p>
+
+<pre><code># sanity check: is caching actually applied to this model?
+curl https://api.example.com/v1/chat/completions \
+  -H "Authorization: Bearer $KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model":"MODEL_ID","messages":[
+       {"role":"system","content":"...long fixed prefix..."},
+       {"role":"user","content":"same question"}]}'
+# run twice; compare usage.prompt_tokens and any cached_tokens field</code></pre>
+
+<p>If the second call reports the same <code>prompt_tokens</code> and no cached-token field, caching is not landing, and no amount of discount math will fix it.</p>
+
+<h2>6. Where the discount really lands</h2>
+
+<p>Short version: the marketplace discount lands on <em>every</em> token, including output, including uncacheable input. The cache discount lands only on a slice of input, and that slice is already cheap. So the discount you should budget around is the marketplace one; the cache is a latency feature that occasionally saves a few percent of cost. Treat it in that order and your numbers stop lying to you.</p>
+
+<p>— Written from the November 2026 price snapshot (122 models, 63 vendors, data as of 2026-11-25 17:46). Live prices move with seller quotes; check the price table before you commit a number to a budget.</p>
+
+<footer>
+<p>LONG AI · LLM API marketplace — one OpenAI-compatible key across the live model catalogue from multiple upstream sellers.
+<a href="https://ai.dijinlong.com/pricing">Live pricing</a> ·
+<a href="https://ai.dijinlong.com/model-docs">Model reference pages</a> ·
+<a href="https://ai.dijinlong.com/docs">Docs</a></p>
+</footer>
+</body>
+</html>
